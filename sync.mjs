@@ -2,9 +2,10 @@
 // ADO -> Jira DevInfo sync. No deps (Node 20+ global fetch).
 //
 // Reads Azure DevOps (read-only PAT): active + recently-completed PRs, all
-// DP-<n> branches, and their tip commits. Parses the DP-<n> key from PR
-// title/description/branch and from commit messages. Pushes everything to the
-// Jira DevInfo bulk API so it shows in each DP issue's Development panel.
+// DP-<n> branches, and their tip commits. Parses the DP-<n> key from the PR
+// branch name + title (NOT the description — see the PR loop) and from commit
+// messages. Pushes everything to the Jira DevInfo bulk API so it shows in each
+// DP issue's Development panel.
 //
 // Idempotent: safe to re-run. updateSequenceId is derived from timestamps so a
 // later run always wins. Entities with no DP-<n> key are skipped.
