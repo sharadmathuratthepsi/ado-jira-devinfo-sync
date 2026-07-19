@@ -146,7 +146,10 @@ async function build(rid) {
   for (const pr of prs) {
     const src = (pr.sourceRefName || '').replace('refs/heads/', '');
     const tgt = (pr.targetRefName || '').replace('refs/heads/', '');
-    const keys = keysFrom(pr.title, pr.description, src);
+    // Authoritative keys only: branch name + PR title. NOT the description —
+    // descriptions are prose that name-drop other tickets ("relates to DP-19"),
+    // which over-links a PR to issues it doesn't own.
+    const keys = keysFrom(src, pr.title);
     if (!keys.length) continue;
     const updated = pr.closedDate || pr.creationDate || new Date().toISOString();
     pullRequestEntities.push({
