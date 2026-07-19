@@ -6,7 +6,7 @@ name: ado-jira-devinfo-sync
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # every 15 min (GitHub may batch/delay on free tier)
+    - cron: '* * * * *'   # every minute (GitHub coalesces/delays under load — effective ~1-5 min)
   workflow_dispatch: {}       # manual "Run workflow" button
 
 concurrency:
