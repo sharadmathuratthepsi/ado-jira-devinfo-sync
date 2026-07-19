@@ -2,7 +2,7 @@
 
 Connects Azure DevOps to Jira Cloud (project **DP**) — **free**, with **no BDO
 involvement** and **no Azure DevOps admin/write** access. Two pieces, both driven
-off the same read-only poll of Azure DevOps on a GitHub Actions cron:
+off the same read-only poll of Azure DevOps, on a ~15-min schedule:
 
 1. **`sync.mjs` — Development panel.** PRs / branches / commits that reference a
    `DP-<n>` key show up in that issue's **Development** panel, links clicking
@@ -13,7 +13,7 @@ off the same read-only poll of Azure DevOps on a GitHub Actions cron:
 ## How it works
 
 ```
-GitHub Actions (cron every ~1 min — free, always-on)
+external cron (cron-job.org, ~15 min) → POST workflow_dispatch → GitHub Actions run
   read Azure DevOps PRs / branches / commits          ── ADO PAT, READ-ONLY (Code: Read)
   ├─ sync.mjs        parse DP-<n> → POST Jira DevInfo bulk API (2LO OAuth)
   │                  → Development panel populated
@@ -22,9 +22,14 @@ GitHub Actions (cron every ~1 min — free, always-on)
 ```
 
 - **Read-only on Azure DevOps.** The PAT needs only `Code: Read`. No webhook (that
-  would need ADO admin = BDO) — it is a scheduled poll, so updates land within ~1 min.
+  would need ADO admin = BDO) — it is a scheduled poll, so updates land within ~15 min.
 - **Team-wide, no per-dev setup.** The poll reacts to events by anyone (any tool);
   one set of service credentials drives everything.
+- **Trigger:** an external cron (cron-job.org, free) POSTs to the GitHub
+  `workflow_dispatch` API every ~15 min — GitHub's own scheduled-cron is unreliable
+  to activate on a new repo, so it is not used. The cron-job.org token is a
+  fine-grained PAT scoped to this repo with **Actions: read/write**, held only in
+  cron-job.org.
 
 ### Auto-transitions (`transitions.mjs`)
 
@@ -43,7 +48,7 @@ Safety:
   or beyond the target's pipeline rank, it is left untouched (manual advances always
   win). Multi-stage gaps are walked up one valid transition at a time.
 - **Idempotent.** A move (and its single comment) fires only when the status
-  actually changes — re-running every minute does not spam.
+  actually changes — re-running every cycle does not spam.
 - **Epics excluded** — an epic tracks many children; it is never moved on one PR.
 - **Attributed as automated** — each move carries `historyMetadata` ("Automated by
   ADO↔Jira Sync") and posts one comment naming the trigger, so the activity log
@@ -82,8 +87,17 @@ This repo → **Settings → Secrets and variables → Actions → New repositor
 The transition step **auto-skips** if `JIRA_API_TOKEN` is not set — so the DevInfo
 panel works on its own; add the token later to turn on auto-transitions.
 
-Then the workflow runs on a ~1-min cron. Trigger the first run manually:
-**Actions → ado-jira-devinfo-sync → Run workflow**.
+### 5. External cron trigger (cron-job.org)
+GitHub's native scheduled-cron is unreliable to activate on a new repo, so an
+external free cron drives the dispatch. In [cron-job.org](https://cron-job.org):
+- **URL:** `https://api.github.com/repos/sharadmathuratthepsi/ado-jira-devinfo-sync/actions/workflows/sync.yml/dispatches`
+- **Method:** POST · **every ~15 min**
+- **Headers:** `Accept: application/vnd.github+json`, `Authorization: Bearer <fine-grained PAT>`, `X-GitHub-Api-Version: 2022-11-28`
+- **Body:** `{"ref":"main"}`
+- The PAT is fine-grained, scoped to **only this repo**, permission **Actions: read
+  and write** — held only in cron-job.org, never in git.
+
+Trigger a run manually anytime: **Actions → ado-jira-devinfo-sync → Run workflow**.
 
 ## Run locally
 ```bash

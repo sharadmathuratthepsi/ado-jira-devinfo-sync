@@ -7,11 +7,14 @@ name: ado-jira-devinfo-sync
 #                        (In Development / PR Raised / PR Reviewed / Development
 #                        Complete) via the Jira REST API (user API token).
 # Read-only against ADO (PAT).
+#
+# Triggered by workflow_dispatch only. An external cron (cron-job.org, ~15 min)
+# POSTs to the dispatch API — GitHub's own scheduled-cron is unreliable to
+# activate on a new repo (12-48h deprioritization), so it is not used. The
+# manual "Run workflow" button uses the same trigger.
 
 on:
-  schedule:
-    - cron: '*/5 * * * *'   # every 5 min (GitHub's reliable floor; may lag to ~10-15 min under load)
-  workflow_dispatch: {}       # manual "Run workflow" button
+  workflow_dispatch: {}
 
 concurrency:
   group: devinfo-sync
@@ -50,5 +53,3 @@ jobs:
           ADO_REPO: Design_Portal
           COMPLETED_DAYS: '30'
         run: node transitions.mjs
-
-# scheduler-activation nudge 2026-07-19T06:58Z
