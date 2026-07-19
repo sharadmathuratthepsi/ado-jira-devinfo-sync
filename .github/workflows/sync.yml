@@ -50,3 +50,5 @@ jobs:
           ADO_REPO: Design_Portal
           COMPLETED_DAYS: '30'
         run: node transitions.mjs
+
+# scheduler-activation nudge 2026-07-19T06:58Z
