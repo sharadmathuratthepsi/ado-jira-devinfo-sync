@@ -8,10 +8,11 @@ name: ado-jira-devinfo-sync
 #                        Complete) via the Jira REST API (user API token).
 # Read-only against ADO (PAT).
 #
-# Triggered by workflow_dispatch only. An external cron (cron-job.org, ~15 min)
-# POSTs to the dispatch API — GitHub's own scheduled-cron is unreliable to
-# activate on a new repo (12-48h deprioritization), so it is not used. The
-# manual "Run workflow" button uses the same trigger.
+# Triggered by workflow_dispatch only. External cron-job.org jobs POST to the
+# dispatch API on a tiered IST schedule (weekday work-hrs every 5m, weekday
+# off-hrs every 15m, weekend work-hrs hourly) — GitHub's own scheduled-cron is
+# unreliable to activate on a new repo (12-48h deprioritization), so it is not
+# used. The manual "Run workflow" button uses the same trigger.
 
 on:
   workflow_dispatch: {}
