@@ -1,0 +1,35 @@
+name: ado-jira-devinfo-sync
+
+# Pushes Azure DevOps PRs/branches/commits (that reference a DP-<n> key) into
+# the matching Jira issue's Development panel, via the Jira DevInfo API.
+# Read-only against ADO (PAT), server-to-server to Jira (2LO OAuth).
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'   # every 15 min (GitHub may batch/delay on free tier)
+  workflow_dispatch: {}       # manual "Run workflow" button
+
+concurrency:
+  group: devinfo-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Sync ADO -> Jira DevInfo
+        env:
+          JIRA_CLIENT_ID: ${{ secrets.JIRA_CLIENT_ID }}
+          JIRA_CLIENT_SECRET: ${{ secrets.JIRA_CLIENT_SECRET }}
+          JIRA_CLOUD_ID: ${{ secrets.JIRA_CLOUD_ID }}
+          ADO_PAT: ${{ secrets.ADO_PAT }}
+          ADO_ORG: fashion-uk
+          ADO_PROJECT: Design_Portal
+          ADO_REPO: Design_Portal
+          COMPLETED_DAYS: '30'
+        run: node sync.mjs
