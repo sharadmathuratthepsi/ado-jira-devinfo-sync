@@ -97,10 +97,13 @@ async function ado(path, params = {}) {
 
 // Compute, per DP key, the FURTHEST dev stage its ADO state justifies + why.
 async function desiredStages() {
-  const want = new Map(); // key -> { targetId, reason }
-  const bump = (key, targetId, reason) => {
+  const want = new Map(); // key -> { targetId, reason, at }
+  // `at` is when the evidence for this stage appeared (ms epoch, or null if the
+  // API gives us no timestamp). The manual-override floor uses it to tell a NEW
+  // event from the stale one a human already rejected — see manualFloorFrom().
+  const bump = (key, targetId, reason, at = null) => {
     const cur = want.get(key);
-    if (!cur || STATUS[targetId].rank > STATUS[cur.targetId].rank) want.set(key, { targetId, reason });
+    if (!cur || STATUS[targetId].rank > STATUS[cur.targetId].rank) want.set(key, { targetId, reason, at });
   };
 
   // branches -> In Development
@@ -109,7 +112,9 @@ async function desiredStages() {
   for (const r of refs.value) {
     const name = r.name.replace('refs/heads/', '');
     if (skip.has(name)) continue;
-    for (const key of keysFrom(name)) bump(key, '10113', `branch \`${name}\` exists`);
+    // A ref carries no creation date in this API response, so `at` stays null —
+    // treated as "not provably new", which is the safe side of the floor check.
+    for (const key of keysFrom(name)) bump(key, '10113', `branch \`${name}\` exists`, null);
   }
 
   // PRs -> Raised / Reviewed / Development Complete
@@ -127,19 +132,23 @@ async function desiredStages() {
       const keys = keysFrom(src, pr.title);
       if (!keys.length) continue;
       const tgt = (pr.targetRefName || '').replace('refs/heads/', '');
-      let targetId, reason;
+      let targetId, reason, at;
       if (pr.status === 'completed' && tgt === 'develop') {
         targetId = '10116'; reason = `PR #${pr.pullRequestId} merged to develop`;
+        at = pr.closedDate ? Date.parse(pr.closedDate) : null;
       } else if (pr.status === 'active') {
         const votes = (pr.reviewers || []).map((v) => v.vote);
         const rejected = votes.some((v) => v < 0);
         const approved = votes.some((v) => v >= 10);
+        // An approval has no timestamp of its own here; fall back to the PR's
+        // creation date, which is necessarily older — again the safe side.
+        at = pr.creationDate ? Date.parse(pr.creationDate) : null;
         if (approved && !rejected) { targetId = '10115'; reason = `PR #${pr.pullRequestId} approved`; }
         else { targetId = '10114'; reason = `PR #${pr.pullRequestId} open`; }
       } else {
         continue; // abandoned / completed-to-non-develop: leave to manual
       }
-      for (const key of keys) bump(key, targetId, reason);
+      for (const key of keys) bump(key, targetId, reason, at);
     }
   }
   return want;
@@ -159,8 +168,55 @@ async function jira(path, init = {}) {
 }
 
 async function issueMeta(key) {
-  const d = await jira(`/issue/${key}?fields=status,issuetype`);
-  return { statusId: d.fields.status.id, type: d.fields.issuetype?.name };
+  const d = await jira(`/issue/${key}?fields=status,issuetype&expand=changelog`);
+  return {
+    statusId: d.fields.status.id,
+    type: d.fields.issuetype?.name,
+    manualFloor: manualFloorFrom(d.changelog),
+  };
+}
+
+// ---- manual-override memory -------------------------------------------------
+//
+// The never-regress rank guard is not enough on its own. It asks "is the target
+// higher than where the issue is now?" — and nothing records WHY the issue is
+// where it is. So a human who moves a wrongly-advanced ticket back to To Do is
+// silently undone: the next run re-reads the same merged PR, sees To Do (rank 0)
+// below Development Complete (rank 4), and advances it again. Every ~5 minutes,
+// forever. (Observed on DP-169/DP-170, which a *docs* PR marked Development
+// Complete; resetting them by hand did not stick.)
+//
+// The fix reads Jira's own changelog rather than keeping external state. Our
+// transitions are stamped `historyMetadata.type = 'ado-jira-sync'`, so an
+// automated move is distinguishable from a human one. If a PERSON most recently
+// moved the issue DOWN the pipeline, that lower rank becomes a floor: automation
+// will not re-advance past it on evidence that already existed. Only a genuinely
+// NEW event — one that first appeared after the manual reset — may move it again.
+//
+// "New" is decided by timestamp: an event is fresh only if it happened after the
+// manual move. A PR merged last Tuesday cannot re-advance a ticket a human reset
+// this morning; a PR merged this afternoon can.
+function manualFloorFrom(changelog) {
+  const histories = changelog?.histories || [];
+  let latest = null;
+  for (const h of histories) {
+    const item = (h.items || []).find((i) => i.field === 'status');
+    if (!item) continue;
+    // Our own moves carry the sync's history metadata; anything else is a human.
+    const automated = h.historyMetadata?.type === 'ado-jira-sync';
+    if (automated) continue;
+    const at = Date.parse(h.created);
+    if (!latest || at > latest.at) {
+      latest = { at, fromId: item.from, toId: item.to };
+    }
+  }
+  if (!latest) return null;
+  const fromRank = STATUS[latest.fromId]?.rank ?? -1;
+  const toRank = STATUS[latest.toId]?.rank ?? -1;
+  // Only a DOWNWARD human move creates a floor. A human advancing a ticket
+  // forward is not an override of automation — it is agreement with it.
+  if (toRank >= fromRank) return null;
+  return { at: latest.at, rank: toRank, statusId: latest.toId };
 }
 
 // Find the transition whose destination is toStatusId, from the current status.
@@ -206,7 +262,7 @@ async function postComment(key, fromName, toName, reason) {
 
   const plan = [];   // {key, from, to, reason, steps}
   const skipped = [];
-  for (const [key, { targetId, reason }] of want) {
+  for (const [key, { targetId, reason, at }] of want) {
     let meta;
     try { meta = await issueMeta(key); }
     catch (e) { skipped.push(`${key}: cannot read (${e.message.split('->')[1]?.trim() || e.message})`); continue; }
@@ -219,6 +275,24 @@ async function postComment(key, fromName, toName, reason) {
     const to = STATUS[targetId];
     if (from.rank < 0) { skipped.push(`${key}: unknown current status ${fromId}`); continue; }
     if (from.rank >= to.rank) { skipped.push(`${key}: at ${from.name} (rank ${from.rank}) ≥ target ${to.name} — no regress`); continue; }
+
+    // Manual-override floor: a human moved this issue DOWN the pipeline, so the
+    // evidence that first advanced it has been explicitly rejected. Re-advancing
+    // on that same evidence is what made a hand-reset ticket bounce back within
+    // minutes. Only evidence that appeared AFTER the manual move may act.
+    const floor = meta.manualFloor;
+    if (floor && to.rank > floor.rank) {
+      if (at == null) {
+        skipped.push(`${key}: manually set to ${STATUS[floor.statusId]?.name || floor.statusId} — holding (evidence has no timestamp, cannot prove it is new)`);
+        continue;
+      }
+      if (at <= floor.at) {
+        const when = new Date(floor.at).toISOString().slice(0, 16).replace('T', ' ');
+        skipped.push(`${key}: manually set to ${STATUS[floor.statusId]?.name || floor.statusId} at ${when} — holding (${reason} predates it)`);
+        continue;
+      }
+      // Evidence is genuinely newer than the manual move: let it through.
+    }
 
     // walk up the dev chain from just-after current rank to target
     const steps = CHAIN.filter((sid) => STATUS[sid].rank > from.rank && STATUS[sid].rank <= to.rank);

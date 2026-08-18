@@ -47,6 +47,22 @@ Safety:
 - **Forward-only.** Never regresses a ticket — if its current status is already at
   or beyond the target's pipeline rank, it is left untouched (manual advances always
   win). Multi-stage gaps are walked up one valid transition at a time.
+- **A manual reset sticks.** Forward-only is not enough on its own: it asks only
+  "is the target higher than where this is now?", and nothing records *why* the
+  ticket is where it is. So a human correcting a wrongly-advanced ticket was
+  silently undone — the next run re-read the same merged PR, saw To Do, and
+  advanced it again, every ~5 minutes. (Seen on DP-169/DP-170, which a **docs**
+  PR marked Development Complete: the PR title mentioned the keys, and the
+  connector does not distinguish "we wrote the story" from "we built it".)
+
+  Now, when a **person** moves an issue *down* the pipeline, that status becomes
+  a **floor**. Automation will not climb past it on evidence that already
+  existed — only on an event that first appeared **after** the manual move. A PR
+  merged last week cannot re-advance a ticket reset this morning; a PR merged
+  this afternoon can. Human moves are told from automated ones by the
+  `historyMetadata` stamp the connector already writes, so this needs no external
+  state — it reads Jira's own changelog. Evidence with no timestamp (a bare
+  branch ref) is treated as not-provably-new and holds.
 - **Idempotent.** A move (and its single comment) fires only when the status
   actually changes — re-running every cycle does not spam.
 - **Epics excluded** — an epic tracks many children; it is never moved on one PR.
